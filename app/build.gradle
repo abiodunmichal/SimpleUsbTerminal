@@ -1,5 +1,4 @@
-‎Build.gra
-‎
+
 ‎plugins {
 ‎    id 'com.android.application'
 ‎}
