@@ -9,14 +9,14 @@ import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
-import android.media.Image;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.util.Log;
 import android.util.Size;
-import android.view.View;
+import android.view.Surface;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
@@ -24,138 +24,114 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageProxy;
+import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
+import androidx.camera.view.PreviewView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
-import androidx.lifecycle.LifecycleOwner;
 
+import com.hoho.android.usbserial.driver.UsbSerialDriver;
+import com.hoho.android.usbserial.driver.UsbSerialPort;
+import com.hoho.android.usbserial.driver.UsbSerialProber;
+import com.hoho.android.usbserial.util.SerialInputOutputManager;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import java.io.File;
-import java.io.FileOutputStream;
-import java.nio.ByteBuffer;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
-
-import de.kai_morich.simple_usb_terminal.device.UsbSerialDevice;
-import de.kai_morich.simple_usb_terminal.device.UsbSerialInterface;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
-    private static final int CAMERA_PERMISSION_REQUEST = 1001;
-    private static final int STORAGE_PERMISSION_REQUEST = 1002;
+    private static final String TAG = "RobotControl";
+    private static final int REQUEST_CAMERA_PERMISSION = 200;
+    private static final int REQUEST_USB_PERMISSION = 201;
     private static final String ACTION_USB_PERMISSION = "com.android.example.USB_PERMISSION";
 
+    private PreviewView previewView;
     private TextView debugText;
-    private UsbSerialDevice serialDevice;
+    private UsbSerialPort serialPort;
+    private UsbManager usbManager;
+    private SerialInputOutputManager usbIoManager;
+    private ExecutorService executor = Executors.newSingleThreadExecutor();
     private Handler handler = new Handler();
-
     private YuvToRgbConverter yuvToRgbConverter;
+    private File logFile;
+
+    private boolean isProcessing = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        previewView = findViewById(R.id.previewView);
         debugText = findViewById(R.id.debugText);
 
         yuvToRgbConverter = new YuvToRgbConverter(this);
+        usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
+        initLogFile();
 
-        requestPermissions();
-
-        IntentFilter filter = new IntentFilter(ACTION_USB_PERMISSION);
-        registerReceiver(usbReceiver, filter);
-        setupUsbConnection();
-    }
-
-    private void requestPermissions() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED ||
-            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, new String[]{
-                Manifest.permission.CAMERA,
-                Manifest.permission.WRITE_EXTERNAL_STORAGE
-            }, CAMERA_PERMISSION_REQUEST);
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION);
         } else {
             startCamera();
         }
+
+        registerReceiver(usbReceiver, new IntentFilter(ACTION_USB_PERMISSION));
+        connectToUsbSerial();
     }
 
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-        if (requestCode == CAMERA_PERMISSION_REQUEST) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                startCamera();
+    private void initLogFile() {
+        File downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+        String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
+        logFile = new File(downloads, "robot_log_" + timestamp + ".txt");
+    }
+
+    private void appendToLog(String message) {
+        runOnUiThread(() -> {
+            String timestamped = "[" + new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date()) + "] " + message;
+            debugText.append(timestamped + "\n");
+
+            try (FileWriter writer = new FileWriter(logFile, true)) {
+                writer.write(timestamped + "\n");
+            } catch (IOException e) {
+                Log.e(TAG, "Log write error: " + e.getMessage());
             }
+        });
+    }
+
+    private void connectToUsbSerial() {
+        List<UsbSerialDriver> availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager);
+        if (availableDrivers.isEmpty()) {
+            appendToLog("No USB serial device found.");
+            return;
         }
-    }
 
-    private void startCamera() {
-        ListenableFuture<ProcessCameraProvider> cameraProviderFuture = ProcessCameraProvider.getInstance(this);
-        cameraProviderFuture.addListener(() -> {
-            try {
-                ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
-
-                ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
-                        .setTargetResolution(new Size(128, 128))
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .build();
-
-                imageAnalysis.setAnalyzer(ContextCompat.getMainExecutor(this), image -> {
-                    Bitmap bitmap = imageToBitmap(image);
-                    float brightness = calculateBrightness(bitmap);
-                    analyzeFrame(brightness);
-                    image.close();
-                });
-
-                CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
-
-                cameraProvider.unbindAll();
-                cameraProvider.bindToLifecycle((LifecycleOwner) this, cameraSelector, imageAnalysis);
-            } catch (Exception e) {
-                e.printStackTrace();
-                appendToLog("Camera start failed: " + e.getMessage());
-            }
-        }, ContextCompat.getMainExecutor(this));
-    }
-
-    private Bitmap imageToBitmap(ImageProxy image) {
-        Bitmap bitmap = Bitmap.createBitmap(image.getWidth(), image.getHeight(), Bitmap.Config.ARGB_8888);
-        yuvToRgbConverter.yuvToRgb(image, bitmap);
-        return bitmap;
-    }
-
-    private float calculateBrightness(Bitmap bitmap) {
-        long sum = 0;
-        int width = bitmap.getWidth();
-        int height = bitmap.getHeight();
-        for (int x = width / 4; x < 3 * width / 4; x++) {
-            for (int y = height / 4; y < 3 * height / 4; y++) {
-                int pixel = bitmap.getPixel(x, y);
-                int r = (pixel >> 16) & 0xFF;
-                int g = (pixel >> 8) & 0xFF;
-                int b = pixel & 0xFF;
-                sum += (r + g + b) / 3;
-            }
-        }
-        return sum / ((width / 2) * (height / 2));
-    }
-
-    private void analyzeFrame(float brightness) {
-        appendToLog("Brightness: " + brightness);
-
-        if (brightness < 40) {
-            sendCommand("b");
-            appendToLog("Obstacle detected! Moving back");
-        } else {
-            sendCommand("f");
-            appendToLog("Path clear. Moving forward");
-        }
-    }
-
-    private void setupUsbConnection() {
-        UsbManager usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
-        for (UsbDevice device : usbManager.getDeviceList().values()) {
+        UsbSerialDriver driver = availableDrivers.get(0);
+        UsbDevice device = driver.getDevice();
+        if (!usbManager.hasPermission(device)) {
             PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 0, new Intent(ACTION_USB_PERMISSION), PendingIntent.FLAG_IMMUTABLE);
             usbManager.requestPermission(device, permissionIntent);
+            return;
+        }
+
+        UsbDeviceConnection connection = usbManager.openDevice(device);
+        if (connection == null) {
+            appendToLog("Failed to open USB device connection.");
+            return;
+        }
+
+        serialPort = driver.getPorts().get(0);
+        try {
+            serialPort.open(connection);
+            serialPort.setParameters(9600, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE);
+            appendToLog("Serial port opened.");
+        } catch (IOException e) {
+            appendToLog("Serial port error: " + e.getMessage());
         }
     }
 
@@ -166,52 +142,102 @@ public class MainActivity extends AppCompatActivity {
                     UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
                     if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
                         if (device != null) {
-                            serialDevice = UsbSerialDevice.createUsbSerialDevice(device);
-                            if (serialDevice != null) {
-                                serialDevice.open();
-                                serialDevice.setBaudRate(9600);
-                                appendToLog("Serial connection opened");
-                            }
+                            connectToUsbSerial();
                         }
                     } else {
-                        appendToLog("USB permission denied");
+                        appendToLog("USB permission denied.");
                     }
                 }
             }
         }
     };
 
-    private void sendCommand(String command) {
-        if (serialDevice != null) {
-            serialDevice.write(command.getBytes());
+    private void startCamera() {
+        ListenableFuture<ProcessCameraProvider> cameraProviderFuture = ProcessCameraProvider.getInstance(this);
+        cameraProviderFuture.addListener(() -> {
+            try {
+                ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
+                Preview preview = new Preview.Builder().build();
+                CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
+
+                ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
+                        .setTargetResolution(new Size(128, 128))
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .build();
+
+                imageAnalysis.setAnalyzer(executor, this::analyzeFrame);
+
+                cameraProvider.unbindAll();
+                cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis);
+                preview.setSurfaceProvider(previewView.getSurfaceProvider());
+            } catch (Exception e) {
+                appendToLog("Camera start error: " + e.getMessage());
+            }
+        }, ContextCompat.getMainExecutor(this));
+    }
+
+    private void analyzeFrame(@NonNull ImageProxy image) {
+        if (isProcessing) {
+            image.close();
+            return;
         }
+        isProcessing = true;
+
+        Bitmap bitmap = Bitmap.createBitmap(image.getWidth(), image.getHeight(), Bitmap.Config.ARGB_8888);
+        yuvToRgbConverter.yuvToRgb(image, bitmap);
+        image.close();
+
+        int centerX = bitmap.getWidth() / 2;
+        int centerY = bitmap.getHeight() / 2;
+
+        int brightness = 0;
+        for (int y = centerY - 10; y < centerY + 10; y++) {
+            for (int x = centerX - 10; x < centerX + 10; x++) {
+                int pixel = bitmap.getPixel(x, y);
+                int r = (pixel >> 16) & 0xff;
+                int g = (pixel >> 8) & 0xff;
+                int b = pixel & 0xff;
+                brightness += (r + g + b) / 3;
+            }
+        }
+        brightness /= 400;
+
+        appendToLog("Center brightness: " + brightness);
+
+        String command;
+        if (brightness < 50) {
+            command = "b";
+        } else {
+            command = "f";
+        }
+
+        sendSerialCommand(command);
+        handler.postDelayed(() -> isProcessing = false, 500);
     }
 
-    private void appendToLog(String message) {
-        runOnUiThread(() -> {
-            debugText.append(message + "\n");
-            writeLogToFile(message);
-        });
-    }
-
-    private void writeLogToFile(String message) {
-        try {
-            File file = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "robot_log.txt");
-            FileOutputStream fos = new FileOutputStream(file, true);
-            String timestamp = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
-            fos.write((timestamp + " - " + message + "\n").getBytes());
-            fos.close();
-        } catch (Exception e) {
-            Log.e("LogFile", "Error writing log: " + e.getMessage());
+    private void sendSerialCommand(String command) {
+        if (serialPort != null) {
+            try {
+                serialPort.write(command.getBytes(), 100);
+                appendToLog("Sent: " + command);
+            } catch (IOException e) {
+                appendToLog("Send failed: " + e.getMessage());
+            }
         }
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (serialDevice != null) {
-            serialDevice.close();
+        if (usbIoManager != null) {
+            usbIoManager.stop();
         }
+        try {
+            if (serialPort != null) {
+                serialPort.close();
+            }
+        } catch (IOException ignored) {}
         unregisterReceiver(usbReceiver);
+        executor.shutdown();
     }
-}
+    }
