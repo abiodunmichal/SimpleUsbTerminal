@@ -1,272 +1,217 @@
+package de.kai_morich.simple_usb_terminal;
 
-‎package de.kai_morich.simple_usb_terminal;
-‎
-‎import android.Manifest;
-‎import android.content.Intent;
-‎import android.content.pm.PackageManager;
-‎import android.hardware.usb.UsbDeviceConnection;
-‎import android.hardware.usb.UsbManager;
-‎import android.os.Bundle;
-‎import android.util.Log;
-‎import android.widget.TextView;
-‎import android.widget.Toast;
-‎
-‎import androidx.annotation.NonNull;
-‎import androidx.appcompat.app.AppCompatActivity;
-‎import androidx.appcompat.widget.Toolbar;
-‎import androidx.camera.core.CameraSelector;
-‎import androidx.camera.core.ImageAnalysis;
-‎import androidx.camera.core.ImageProxy;
-‎import androidx.camera.core.Preview;
-‎import androidx.camera.lifecycle.ProcessCameraProvider;
-‎import androidx.camera.view.PreviewView;
-‎import androidx.core.app.ActivityCompat;
-‎import androidx.core.content.ContextCompat;
-‎import androidx.fragment.app.FragmentManager;
-‎
-‎import com.google.common.util.concurrent.ListenableFuture;
-‎import com.hoho.android.usbserial.driver.UsbSerialDriver;
-‎import com.hoho.android.usbserial.driver.UsbSerialPort;
-‎import com.hoho.android.usbserial.driver.UsbSerialProber;
-‎
-‎import java.nio.ByteBuffer;
-‎import java.util.List;
-‎import java.util.concurrent.ExecutionException;
-‎import java.util.concurrent.Executors;
-‎
-‎public class MainActivity extends AppCompatActivity implements FragmentManager.OnBackStackChangedListener {
-‎
-‎    private static final int REQUEST_CAMERA_PERMISSION = 10;
-‎    private PreviewView previewView;
-‎    private TextView debugText;
-‎
-‎    private UsbSerialPort serialPort;
-‎    private UsbManager usbManager;
-‎    private char lastCommand = '-';
-‎    private boolean obstacleDetected = false;
-‎    private boolean scanning = false;
-‎    private int leftScan = 0;
-‎    private int rightScan = 0;
-‎
-‎    private final StringBuilder fullLog = new StringBuilder();
-‎    private void appendToLog(String msg) {
-‎        Log.d("AppLog", msg);
-‎        runOnUiThread(() -> {
-‎            fullLog.append(msg).append("\n");
-‎            String[] lines = fullLog.toString().split("\n");
-‎            if (lines.length > 20) {
-‎                StringBuilder trimmed = new StringBuilder();
-‎                for (int i = lines.length - 20; i < lines.length; i++) {
-‎                    trimmed.append(lines[i]).append("\n");
-‎                }
-‎                fullLog.setLength(0);
-‎                fullLog.append(trimmed);
-‎            }
-‎            debugText.setText(fullLog.toString());
-‎        });
-‎    }
-‎
-‎    @Override
-‎    protected void onCreate(Bundle savedInstanceState) {
-‎        super.onCreate(savedInstanceState);
-‎        setContentView(R.layout.activity_main);
-‎
-‎        Toolbar toolbar = findViewById(R.id.toolbar);
-‎        setSupportActionBar(toolbar);
-‎        getSupportFragmentManager().addOnBackStackChangedListener(this);
-‎        if (savedInstanceState == null)
-‎            getSupportFragmentManager().beginTransaction().add(R.id.fragment, new DevicesFragment(), "devices").commit();
-‎        else
-‎            onBackStackChanged();
-‎
-‎        previewView = findViewById(R.id.previewView);
-‎        debugText = findViewById(R.id.debugText);
-‎
-‎        appendToLog("App started");
-‎
-‎        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-‎                != PackageManager.PERMISSION_GRANTED) {
-‎            ActivityCompat.requestPermissions(this,
-‎                    new String[]{Manifest.permission.CAMERA},
-‎                    REQUEST_CAMERA_PERMISSION);
-‎        } else {
-‎            startCamera();
-‎        }
-‎
-‎        usbManager = (UsbManager) getSystemService(USB_SERVICE);
-‎        List<UsbSerialDriver> drivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager);
-‎        if (!drivers.isEmpty()) {
-‎            UsbSerialDriver driver = drivers.get(0);
-‎            UsbDeviceConnection connection = usbManager.openDevice(driver.getDevice());
-‎            if (connection != null) {
-‎                serialPort = driver.getPorts().get(0);
-‎                try {
-‎                    serialPort.open(connection);
-‎                    serialPort.setParameters(9600, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE);
-‎                    Toast.makeText(this, "Serial connected", Toast.LENGTH_SHORT).show();
-‎                    appendToLog("Serial connected at 9600 baud");
-‎                } catch (Exception e) {
-‎                    Log.e("Serial", "Error opening serial port", e);
-‎                    appendToLog("Error opening serial port: " + e.getMessage());
-‎                }
-‎            } else {
-‎                Toast.makeText(this, "USB permission denied", Toast.LENGTH_SHORT).show();
-‎                appendToLog("USB permission denied or device not found");
-‎            }
-‎        }
-‎    }
-‎
-‎    private void startCamera() {
-‎        ListenableFuture cameraProviderFuture = ProcessCameraProvider.getInstance(this);
-‎        cameraProviderFuture.addListener(() -> {
-‎            try {
-‎                ProcessCameraProvider cameraProvider = (ProcessCameraProvider) cameraProviderFuture.get();
-‎                Preview preview = new Preview.Builder().build();
-‎                preview.setSurfaceProvider(previewView.getSurfaceProvider());
-‎
-‎                CameraSelector cameraSelector = new CameraSelector.Builder()
-‎                        .requireLensFacing(CameraSelector.LENS_FACING_BACK)
-‎                        .build();
-‎
-‎                ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
-‎                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-‎                        .build();
-‎
-‎                imageAnalysis.setAnalyzer(
-‎                        Executors.newSingleThreadExecutor(),
-‎                        image -> {
-‎                            detectObstacles(image);
-‎                            image.close();
-‎                        });
-‎
-‎                cameraProvider.unbindAll();
-‎                cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis);
-‎                appendToLog("Camera active");
-‎
-‎            } catch (ExecutionException | InterruptedException e) {
-‎                Log.e("CameraX", "Camera start failed", e);
-‎                appendToLog("Camera start failed: " + e.getMessage());
-‎            }
-‎        }, ContextCompat.getMainExecutor(this));
-‎    }
-‎
-‎    private void detectObstacles(ImageProxy image) {
-‎        ImageProxy.PlaneProxy[] planes = image.getPlanes();
-‎        if (planes.length > 0) {
-‎            ByteBuffer buffer = planes[0].getBuffer();
-‎            byte[] bytes = new byte[buffer.remaining()];
-‎            buffer.get(bytes);
-‎
-‎            int width = image.getWidth();
-‎            int height = image.getHeight();
-‎            int rowStride = planes[0].getRowStride();
-‎            int thirdWidth = width / 3;
-‎
-‎            int[] brightness = new int[3];
-‎            int[] counts = new int[3];
-‎
-‎            for (int y = 0; y < height; y += 10) {
-‎                for (int x = 0; x < width; x += 10) {
-‎                    int offset = y * rowStride + x;
-‎                    if (offset >= bytes.length) continue;
-‎
-‎                    int pixel = bytes[offset] & 0xFF;
-‎                    if (x < thirdWidth) {
-‎                        brightness[0] += pixel;
-‎                        counts[0]++;
-‎                    } else if (x < 2 * thirdWidth) {
-‎                        brightness[1] += pixel;
-‎                        counts[1]++;
-‎                    } else {
-‎                        brightness[2] += pixel;
-‎                        counts[2]++;
-‎                    }
-‎                }
-‎            }
-‎
-‎            int leftAvg = counts[0] > 0 ? brightness[0] / counts[0] : 0;
-‎            int centerAvg = counts[1] > 0 ? brightness[1] / counts[1] : 0;
-‎            int rightAvg = counts[2] > 0 ? brightness[2] / counts[2] : 0;
-‎
-‎            String debugMsg = "L: " + leftAvg + "  C: " + centerAvg + "  R: " + rightAvg + "  →  " + lastCommand;
-‎            appendToLog(debugMsg);
-‎
-‎            if (!scanning && !obstacleDetected && centerAvg < 50) {
-‎                obstacleDetected = true;
-‎                sendCommand('b');
-‎                try { Thread.sleep(500); } catch (InterruptedException ignored) {}
-‎                sendCommand('l');
-‎                try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
-‎                leftScan = centerAvg;
-‎                sendCommand('r');
-‎                try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
-‎                rightScan = centerAvg;
-‎
-‎                if (leftScan > rightScan && leftScan > 40) {
-‎                    sendCommand('l');
-‎                    try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
-‎                    sendCommand('f');
-‎                } else if (rightScan >= leftScan && rightScan > 40) {
-‎                    sendCommand('f');
-‎                } else {
-‎                    sendCommand('b');
-‎                }
-‎
-‎                obstacleDetected = false;
-‎            } else if (!obstacleDetected && centerAvg >= 50) {
-‎                sendCommand('f');
-‎            }
-‎        }
-‎    }
-‎
-‎    private void sendCommand(char command) {
-‎        if (serialPort != null) {
-‎            try {
-‎                serialPort.write(new byte[]{(byte) command}, 100);
-‎                lastCommand = command;
-‎                appendToLog("Sent command: " + command);
-‎            } catch (Exception e) {
-‎                Log.e("SerialCommand", "Failed to send command", e);
-‎                appendToLog("Error sending command: " + e.getMessage());
-‎            }
-‎        } else {
-‎            Log.e("SerialCommand", "Serial port not available");
-‎            appendToLog("Serial port not available");
-‎        }
-‎    }
-‎
-‎    @Override
-‎    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-‎        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-‎        if (requestCode == REQUEST_CAMERA_PERMISSION) {
-‎            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-‎                startCamera();
-‎            } else {
-‎                Toast.makeText(this, "Camera permission denied", Toast.LENGTH_SHORT).show();
-‎                appendToLog("Camera permission denied");
-‎            }
-‎        }
-‎    }
-‎
-‎    @Override
-‎    public void onBackStackChanged() {
-‎        getSupportActionBar().setDisplayHomeAsUpEnabled(getSupportFragmentManager().getBackStackEntryCount() > 0);
-‎    }
-‎
-‎    @Override
-‎    public boolean onSupportNavigateUp() {
-‎        onBackPressed();
-‎        return true;
-‎    }
-‎
-‎    @Override
-‎    protected void onNewIntent(Intent intent) {
-‎        if ("android.hardware.usb.action.USB_DEVICE_ATTACHED".equals(intent.getAction())) {
-‎            TerminalFragment terminal = (TerminalFragment) getSupportFragmentManager().findFragmentByTag("terminal");
-‎            if (terminal != null) terminal.status("USB device detected");
-‎            appendToLog("USB device attached");
-‎        }
-‎        super.onNewIntent(intent);
-‎    }
-‎ }
-‎
+import android.Manifest;
+import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbManager;
+import android.media.Image;
+import android.os.Bundle;
+import android.os.Environment;
+import android.os.Handler;
+import android.util.Log;
+import android.util.Size;
+import android.view.View;
+import android.widget.TextView;
+
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.camera.core.CameraSelector;
+import androidx.camera.core.ImageAnalysis;
+import androidx.camera.core.ImageProxy;
+import androidx.camera.lifecycle.ProcessCameraProvider;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+import androidx.lifecycle.LifecycleOwner;
+
+import com.google.common.util.concurrent.ListenableFuture;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.nio.ByteBuffer;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+
+import de.kai_morich.simple_usb_terminal.device.UsbSerialDevice;
+import de.kai_morich.simple_usb_terminal.device.UsbSerialInterface;
+
+public class MainActivity extends AppCompatActivity {
+    private static final int CAMERA_PERMISSION_REQUEST = 1001;
+    private static final int STORAGE_PERMISSION_REQUEST = 1002;
+    private static final String ACTION_USB_PERMISSION = "com.android.example.USB_PERMISSION";
+
+    private TextView debugText;
+    private UsbSerialDevice serialDevice;
+    private Handler handler = new Handler();
+
+    private YuvToRgbConverter yuvToRgbConverter;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+        debugText = findViewById(R.id.debugText);
+
+        yuvToRgbConverter = new YuvToRgbConverter(this);
+
+        requestPermissions();
+
+        IntentFilter filter = new IntentFilter(ACTION_USB_PERMISSION);
+        registerReceiver(usbReceiver, filter);
+        setupUsbConnection();
+    }
+
+    private void requestPermissions() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{
+                Manifest.permission.CAMERA,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            }, CAMERA_PERMISSION_REQUEST);
+        } else {
+            startCamera();
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        if (requestCode == CAMERA_PERMISSION_REQUEST) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                startCamera();
+            }
+        }
+    }
+
+    private void startCamera() {
+        ListenableFuture<ProcessCameraProvider> cameraProviderFuture = ProcessCameraProvider.getInstance(this);
+        cameraProviderFuture.addListener(() -> {
+            try {
+                ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
+
+                ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
+                        .setTargetResolution(new Size(128, 128))
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .build();
+
+                imageAnalysis.setAnalyzer(ContextCompat.getMainExecutor(this), image -> {
+                    Bitmap bitmap = imageToBitmap(image);
+                    float brightness = calculateBrightness(bitmap);
+                    analyzeFrame(brightness);
+                    image.close();
+                });
+
+                CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
+
+                cameraProvider.unbindAll();
+                cameraProvider.bindToLifecycle((LifecycleOwner) this, cameraSelector, imageAnalysis);
+            } catch (Exception e) {
+                e.printStackTrace();
+                appendToLog("Camera start failed: " + e.getMessage());
+            }
+        }, ContextCompat.getMainExecutor(this));
+    }
+
+    private Bitmap imageToBitmap(ImageProxy image) {
+        Bitmap bitmap = Bitmap.createBitmap(image.getWidth(), image.getHeight(), Bitmap.Config.ARGB_8888);
+        yuvToRgbConverter.yuvToRgb(image, bitmap);
+        return bitmap;
+    }
+
+    private float calculateBrightness(Bitmap bitmap) {
+        long sum = 0;
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        for (int x = width / 4; x < 3 * width / 4; x++) {
+            for (int y = height / 4; y < 3 * height / 4; y++) {
+                int pixel = bitmap.getPixel(x, y);
+                int r = (pixel >> 16) & 0xFF;
+                int g = (pixel >> 8) & 0xFF;
+                int b = pixel & 0xFF;
+                sum += (r + g + b) / 3;
+            }
+        }
+        return sum / ((width / 2) * (height / 2));
+    }
+
+    private void analyzeFrame(float brightness) {
+        appendToLog("Brightness: " + brightness);
+
+        if (brightness < 40) {
+            sendCommand("b");
+            appendToLog("Obstacle detected! Moving back");
+        } else {
+            sendCommand("f");
+            appendToLog("Path clear. Moving forward");
+        }
+    }
+
+    private void setupUsbConnection() {
+        UsbManager usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
+        for (UsbDevice device : usbManager.getDeviceList().values()) {
+            PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 0, new Intent(ACTION_USB_PERMISSION), PendingIntent.FLAG_IMMUTABLE);
+            usbManager.requestPermission(device, permissionIntent);
+        }
+    }
+
+    private final BroadcastReceiver usbReceiver = new BroadcastReceiver() {
+        public void onReceive(Context context, Intent intent) {
+            if (ACTION_USB_PERMISSION.equals(intent.getAction())) {
+                synchronized (this) {
+                    UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+                    if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
+                        if (device != null) {
+                            serialDevice = UsbSerialDevice.createUsbSerialDevice(device);
+                            if (serialDevice != null) {
+                                serialDevice.open();
+                                serialDevice.setBaudRate(9600);
+                                appendToLog("Serial connection opened");
+                            }
+                        }
+                    } else {
+                        appendToLog("USB permission denied");
+                    }
+                }
+            }
+        }
+    };
+
+    private void sendCommand(String command) {
+        if (serialDevice != null) {
+            serialDevice.write(command.getBytes());
+        }
+    }
+
+    private void appendToLog(String message) {
+        runOnUiThread(() -> {
+            debugText.append(message + "\n");
+            writeLogToFile(message);
+        });
+    }
+
+    private void writeLogToFile(String message) {
+        try {
+            File file = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "robot_log.txt");
+            FileOutputStream fos = new FileOutputStream(file, true);
+            String timestamp = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
+            fos.write((timestamp + " - " + message + "\n").getBytes());
+            fos.close();
+        } catch (Exception e) {
+            Log.e("LogFile", "Error writing log: " + e.getMessage());
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (serialDevice != null) {
+            serialDevice.close();
+        }
+        unregisterReceiver(usbReceiver);
+    }
+}
