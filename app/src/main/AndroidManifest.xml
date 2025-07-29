@@ -1,56 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-‎
-‎<?xml version="1.0" encoding="utf-8"?>
-‎<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-‎    xmlns:tools="http://schemas.android.com/tools">
-‎
-‎    <!-- Permissions (must be outside <application>) -->
-‎    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-‎    <uses-permission android:name="android.permission.CAMERA" />
-‎    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-‎    <uses-permission android:name="android.permission.INTERNET" />
-‎    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-‎        android:maxSdkVersion="28" />
-‎    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-‎    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
-‎    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
-‎    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
-‎
-‎    <!-- Camera feature -->
-‎    <uses-feature android:name="android.hardware.camera.any" />
-‎
-‎    <application
-‎        android:icon="@mipmap/ic_launcher"
-‎        android:label="@string/app_name"
-‎        android:theme="@style/AppTheme"
-‎        android:requestLegacyExternalStorage="true"
-‎        tools:ignore="AllowBackup,GoogleAppIndexingWarning">
-‎
-‎        <activity
-‎            android:name=".MainActivity"
-‎            android:launchMode="singleTask"
-‎            android:windowSoftInputMode="stateHidden|adjustResize"
-‎            android:exported="true">
-‎
-‎            <intent-filter>
-‎                <action android:name="android.intent.action.MAIN" />
-‎                <category android:name="android.intent.category.LAUNCHER" />
-‎            </intent-filter>
-‎
-‎            <intent-filter>
-‎                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
-‎            </intent-filter>
-‎
-‎            <meta-data
-‎                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
-‎                android:resource="@xml/usb_device_filter" />
-‎        </activity>
-‎
-‎        <service
-‎            android:name=".SerialService"
-‎            android:foregroundServiceType="connectedDevice"
-‎            android:exported="false" />
-‎
-‎    </application>
-‎</manifest>
-‎
+    <!-- Permissions (must be outside <application>) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+
+    <!-- Camera feature -->
+    <uses-feature android:name="android.hardware.camera.any" />
+
+    <application
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/AppTheme"
+        android:requestLegacyExternalStorage="true"
+        tools:ignore="AllowBackup,GoogleAppIndexingWarning">
+
+        <activity
+            android:name=".MainActivity"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="stateHidden|adjustResize"
+            android:exported="true">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/usb_device_filter" />
+        </activity>
+
+        <service
+            android:name=".SerialService"
+            android:foregroundServiceType="connectedDevice"
+            android:exported="false" />
+    </application>
+</manifest>
