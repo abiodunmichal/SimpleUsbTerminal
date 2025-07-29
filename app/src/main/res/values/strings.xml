@@ -1,5 +1,27 @@
-<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">USB Robot Controller</string>
     <string name="devices">Devices</string>
+    <string name="no_devices_found">No devices found</string>
+    <string name="select_device">Select device</string>
+    <string name="permission_request">Requesting permission</string>
+    <string name="connect">Connect</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="clear">Clear</string>
+    <string name="send">Send</string>
+    <string name="device_not_found">Device not found</string>
+    <string name="connection_failed">Connection failed</string>
+    <string name="connected">Connected</string>
+    <string name="disconnected">Disconnected</string>
+    <string name="device_info">Device Info</string>
+    <string name="vendor_id">Vendor ID</string>
+    <string name="product_id">Product ID</string>
+    <string name="baud_rate">Baud Rate</string>
+    <string name="data_bits">Data Bits</string>
+    <string name="stop_bits">Stop Bits</string>
+    <string name="parity">Parity</string>
+    <string name="flow_control">Flow Control</string>
+    <string name="default_value">Default</string>
+    <string name="camera_permission_required">Camera permission is required</string>
+    <string name="usb_permission_required">USB permission is required</string>
+    <string name="error">Error</string>
 </resources>
