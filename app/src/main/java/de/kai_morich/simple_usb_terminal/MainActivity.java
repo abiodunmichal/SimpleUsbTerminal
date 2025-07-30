@@ -194,8 +194,7 @@ private void startCamera() {
 
 private void detectObstacles(ImageProxy image) {  
     // ✅ Step 4: Convert to Bitmap and prepare for MiDaS  
-    converter.yuvToRgb(image, bitmapBuffer);  
-
+    converter.yuvToRgb(image.getImage(), bitmapBuffer);  // ✅ This converts ImageProxy to Image
     Bitmap resized = Bitmap.createScaledBitmap(bitmapBuffer, INPUT_WIDTH, INPUT_HEIGHT, true);  
     TensorImage inputImage = TensorImage.fromBitmap(resized);  
 
@@ -269,6 +268,4 @@ protected void onNewIntent(Intent intent) {
     }  
     super.onNewIntent(intent);  
 }  
-}
-
-                
+            }
