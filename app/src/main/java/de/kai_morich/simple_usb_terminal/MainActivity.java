@@ -1,12 +1,12 @@
+// [UNCHANGED IMPORTS]
+package de.kai_morich.simple_usb_terminal;
+
+import android.Manifest;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
 import android.os.Bundle;
-import android.content.Intent;
-import de.kai_morich.simple_usb_terminal.YuvToRgbConverter;
-import android.Manifest;
-import android.os.Handler;
-import android.os.Looper;
 import android.util.Log;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -58,25 +58,7 @@ private char lastCommand = '-';
 private boolean obstacleDetected = false;  
 private boolean scanning = false;  
 private int leftScan = 0;  
-private int rightScan = 0;
-
-// 🔁 Handler and state for obstacle scanning
-private Handler scanHandler = new Handler(Looper.getMainLooper());
-
-private enum ScanState {
-IDLE,
-SCANNING_LEFT,
-SCANNING_RIGHT
-}
-
-private ScanState scanState = ScanState.IDLE;
-
-private float leftScanDepth = 0f;
-private float rightScanDepth = 0f;
-
-private float[] lastDepthArray = null;  // Updated during each frame for access during scan
-private boolean obstacleAvoiding = false;
-private float currentSmoothedDepth = 0f;
+private int rightScan = 0;  
 
 // ✅ Step 2: MiDaS model interpreter and input size  
 private Interpreter tflite;  
@@ -114,7 +96,8 @@ protected void onCreate(Bundle savedInstanceState) {
     setSupportActionBar(toolbar);  
     getSupportFragmentManager().addOnBackStackChangedListener(this);  
     if (savedInstanceState == null)  
-          
+        getSupportFragmentManager().beginTransaction().add(R.id.fragment, new DevicesFragment(), "devices").commit();  
+    else  
         onBackStackChanged();  
 
     previewView = findViewById(R.id.previewView);  
@@ -211,110 +194,28 @@ private void startCamera() {
 
 private void detectObstacles(ImageProxy image) {  
     // ✅ Step 4: Convert to Bitmap and prepare for MiDaS  
-    converter.yuvToRgb(image, bitmapBuffer);
+    converter.yuvToRgb(image, bitmapBuffer);  
 
-if (bitmapBuffer == null) {
-appendToLog("⚠️ Bitmap conversion failed (null)");
-} else {
-appendToLog("✅ Bitmap conversion success");
-}
-
-Bitmap resized = Bitmap.createScaledBitmap(bitmapBuffer, INPUT_WIDTH, INPUT_HEIGHT, true);  
+    Bitmap resized = Bitmap.createScaledBitmap(bitmapBuffer, INPUT_WIDTH, INPUT_HEIGHT, true);  
     TensorImage inputImage = TensorImage.fromBitmap(resized);  
 
     // ✅ Step 5: Run the model on inputImage  
     TensorBuffer outputBuffer = TensorBuffer.createFixedSize(new int[]{1, INPUT_HEIGHT, INPUT_WIDTH, 1}, DataType.FLOAT32);  
-    tflite.run(inputImage.getBuffer(), outputBuffer.getBuffer());
+    tflite.run(inputImage.getBuffer(), outputBuffer.getBuffer());  
 
-float[] depthArray = outputBuffer.getFloatArray();
-appendToLog("📏 Depth output sample: " + depthArray[0] + ", " +
-depthArray[depthArray.length / 2] + ", " +
-depthArray[depthArray.length - 1]);
+    float[] depthArray = outputBuffer.getFloatArray();  
+    appendToLog("🕳 Depth prediction complete. Values: [" + depthArray[0] + ", ...]");
 
-// Normalize depth values to range [0, 1]
-float min = Float.MAX_VALUE;
-float max = -Float.MAX_VALUE;
-for (float v : depthArray) {
-if (v < min) min = v;
-if (v > max) max = v;
-}
-for (int i = 0; i < depthArray.length; i++) {
-depthArray[i] = (depthArray[i] - min) / (max - min);
-}
-
-// Extract normalized center depth
-// Smooth average depth over 5x5 center window
-int centerX = INPUT_WIDTH / 2;
-int centerY = INPUT_HEIGHT / 2;
-float sum = 0f;
-int count = 0;
-
-for (int dy = -2; dy <= 2; dy++) {
-for (int dx = -2; dx <= 2; dx++) {
-int x = centerX + dx;
-int y = centerY + dy;
-if (x >= 0 && x < INPUT_WIDTH && y >= 0 && y < INPUT_HEIGHT) {
-sum += depthArray[y * INPUT_WIDTH + x];
-count++;
-}
-}
-}
-
-appendToLog("📐 Analyzing center window around (" + centerX + ", " + centerY + ") — Pixels: " + count);
-float normalizedCenterDepth = (count > 0) ? (sum / count) : 0f;
-appendToLog("📊 Calculated avg depth for " + scanState.name() + ": " + normalizedCenterDepth);
-currentSmoothedDepth = normalizedCenterDepth;
-// 🔄 Check if we are scanning left or right
-if (scanState == ScanState.SCANNING_LEFT) {
-appendToLog("📸 Capturing scan frame (" + scanState.name() + ")...");
-appendToLog("🖼️ Bitmap size: " + bitmapBuffer.getWidth() + "x" + bitmapBuffer.getHeight());
-leftScanDepth = currentSmoothedDepth;
-appendToLog("📷 Captured LEFT depth: " + leftScanDepth);
-scanState = ScanState.SCANNING_RIGHT;
-
-appendToLog("🔁 Turning right to scan RIGHT...");
-
-sendCommand('r');
-scanHandler.postDelayed(() -> {
-appendToLog("📷 Ready to scan RIGHT frame...");
-}, 2000);
-
-return;
-
-}
-
-if (scanState == ScanState.SCANNING_RIGHT) {
-rightScanDepth = currentSmoothedDepth;
-appendToLog("📷 Captured RIGHT depth: " + rightScanDepth);
-
-if (rightScanDepth > leftScanDepth + 0.05f) {  
-    appendToLog("➡ Right is clearer. Moving forward.");  
-    sendCommand('f');  
-} else {  
-    appendToLog("⬅ Left is better or equal. Turning back left.");  
-    sendCommand('l');  
-    scanHandler.postDelayed(() -> {  
-        sendCommand('f');  
-    }, 1000);  
-}  
-
-scanState = ScanState.IDLE;  
-obstacleAvoiding = false;  
-return;
-
-}
-
-// Log the result
-appendToLog("📏 Normalized center depth: " + normalizedCenterDepth);
-if (normalizedCenterDepth < 0.3f) {
-appendToLog("🛑 Obstacle detected — scanning alternatives...");
-obstacleAvoiding = true;
-checkLeftAndRight();  // 🔁 Check sides instead of just reversing
+// ✅ Step 6: Extract center depth
+int centerIndex = (INPUT_HEIGHT / 2) * INPUT_WIDTH + (INPUT_WIDTH / 2);
+float centerDepth = depthArray[centerIndex];
+appendToLog("📏 Estimated center depth: " + centerDepth);
+if (centerDepth < 0.3f) {
+appendToLog("🛑 Obstacle too close — going backward");
+sendCommand('b');
 } else {
-if (!obstacleAvoiding) {
 appendToLog("✅ Path clear — moving forward");
 sendCommand('f');
-}
 }
 
 }  
@@ -333,19 +234,7 @@ private void sendCommand(char command) {
         Log.e("SerialCommand", "Serial port not available");  
         appendToLog("Serial port not available");  
     }  
-}
-
-private void checkLeftAndRight() {
-appendToLog("🔍 Starting scan: Turning left...");
-scanState = ScanState.SCANNING_LEFT;
-sendCommand('l');
-
-scanHandler.postDelayed(() -> {  
-    appendToLog("📷 Ready to scan LEFT frame...");  
-    // DetectObstacles() will now handle the depth capture for this angle  
-}, 1000);
-
-}
+}  
 
 @Override  
 public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {  
@@ -374,11 +263,12 @@ public boolean onSupportNavigateUp() {
 @Override  
 protected void onNewIntent(Intent intent) {  
     if ("android.hardware.usb.action.USB_DEVICE_ATTACHED".equals(intent.getAction())) {  
-          
+        TerminalFragment terminal = (TerminalFragment) getSupportFragmentManager().findFragmentByTag("terminal");  
+        if (terminal != null) terminal.status("USB device detected");  
         appendToLog("USB device attached");  
     }  
     super.onNewIntent(intent);  
 }  
 }
 
-    
+                
