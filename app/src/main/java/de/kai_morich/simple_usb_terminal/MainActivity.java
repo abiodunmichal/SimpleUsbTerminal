@@ -1,4 +1,3 @@
-package de.kai_morich.simple_usb_terminal;
 import android.content.pm.PackageManager;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
@@ -210,9 +209,15 @@ private void startCamera() {
 
 private void detectObstacles(ImageProxy image) {  
     // ✅ Step 4: Convert to Bitmap and prepare for MiDaS  
-    converter.yuvToRgb(image, bitmapBuffer);  
+    converter.yuvToRgb(image, bitmapBuffer);
 
-    Bitmap resized = Bitmap.createScaledBitmap(bitmapBuffer, INPUT_WIDTH, INPUT_HEIGHT, true);  
+if (bitmapBuffer == null) {
+appendToLog("⚠️ Bitmap conversion failed (null)");
+} else {
+appendToLog("✅ Bitmap conversion success");
+}
+
+Bitmap resized = Bitmap.createScaledBitmap(bitmapBuffer, INPUT_WIDTH, INPUT_HEIGHT, true);  
     TensorImage inputImage = TensorImage.fromBitmap(resized);  
 
     // ✅ Step 5: Run the model on inputImage  
@@ -250,10 +255,14 @@ count++;
 }
 }
 
+appendToLog("📐 Analyzing center window around (" + centerX + ", " + centerY + ") — Pixels: " + count);
 float normalizedCenterDepth = (count > 0) ? (sum / count) : 0f;
+appendToLog("📊 Calculated avg depth for " + scanState.name() + ": " + normalizedCenterDepth);
 currentSmoothedDepth = normalizedCenterDepth;
 // 🔄 Check if we are scanning left or right
 if (scanState == ScanState.SCANNING_LEFT) {
+appendToLog("📸 Capturing scan frame (" + scanState.name() + ")...");
+appendToLog("🖼️ Bitmap size: " + bitmapBuffer.getWidth() + "x" + bitmapBuffer.getHeight());
 leftScanDepth = currentSmoothedDepth;
 appendToLog("📷 Captured LEFT depth: " + leftScanDepth);
 scanState = ScanState.SCANNING_RIGHT;
@@ -372,4 +381,4 @@ protected void onNewIntent(Intent intent) {
 }  
 }
 
-    
+
