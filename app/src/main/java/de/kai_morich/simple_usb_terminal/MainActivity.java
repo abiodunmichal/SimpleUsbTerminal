@@ -59,6 +59,23 @@ public class MainActivity extends AppCompatActivity implements FragmentManager.O
     private boolean scanning = false;
     private int leftScan = 0;
     private int rightScan = 0;
+// 🔁 Handler and state for obstacle scanning
+private Handler scanHandler = new Handler(Looper.getMainLooper());
+
+private enum ScanState {
+    IDLE,
+    SCANNING_LEFT,
+    SCANNING_RIGHT
+}
+
+private ScanState scanState = ScanState.IDLE;
+
+private float leftScanDepth = 0f;
+private float rightScanDepth = 0f;
+
+private float[] lastDepthArray = null;  // Updated during each frame for access during scan
+private boolean obstacleAvoiding = false;
+private float currentSmoothedDepth = 0f;
 
     // ✅ Step 2: MiDaS model interpreter and input size
     private Interpreter tflite;
@@ -203,18 +220,51 @@ public class MainActivity extends AppCompatActivity implements FragmentManager.O
         TensorBuffer outputBuffer = TensorBuffer.createFixedSize(new int[]{1, INPUT_HEIGHT, INPUT_WIDTH, 1}, DataType.FLOAT32);
         tflite.run(inputImage.getBuffer(), outputBuffer.getBuffer());
 
-        float[] depthArray = outputBuffer.getFloatArray();
-        appendToLog("🕳 Depth prediction complete. Values: [" + depthArray[0] + ", ...]");
-// ✅ Step 6: Extract center depth
-    int centerIndex = (INPUT_HEIGHT / 2) * INPUT_WIDTH + (INPUT_WIDTH / 2);
-    float centerDepth = depthArray[centerIndex];
-    appendToLog("📏 Estimated center depth: " + centerDepth);
-if (centerDepth < 0.3f) {
-    appendToLog("🛑 Obstacle too close — going backward");
-    sendCommand('b');
+float[] depthArray = outputBuffer.getFloatArray();
+
+// Normalize depth values to range [0, 1]
+float min = Float.MAX_VALUE;
+float max = -Float.MAX_VALUE;
+for (float v : depthArray) {
+    if (v < min) min = v;
+    if (v > max) max = v;
+}
+for (int i = 0; i < depthArray.length; i++) {
+    depthArray[i] = (depthArray[i] - min) / (max - min);
+}
+
+// Extract normalized center depth
+// Smooth average depth over 5x5 center window
+int centerX = INPUT_WIDTH / 2;
+int centerY = INPUT_HEIGHT / 2;
+float sum = 0f;
+int count = 0;
+
+for (int dy = -2; dy <= 2; dy++) {
+    for (int dx = -2; dx <= 2; dx++) {
+        int x = centerX + dx;
+        int y = centerY + dy;
+        if (x >= 0 && x < INPUT_WIDTH && y >= 0 && y < INPUT_HEIGHT) {
+            sum += depthArray[y * INPUT_WIDTH + x];
+            count++;
+        }
+    }
+}
+
+float normalizedCenterDepth = (count > 0) ? (sum / count) : 0f;
+currentSmoothedDepth = normalizedCenterDepth;
+
+// Log the result
+appendToLog("📏 Normalized center depth: " + normalizedCenterDepth);
+if (normalizedCenterDepth < 0.3f) {
+    appendToLog("🛑 Obstacle detected — scanning alternatives...");
+    obstacleAvoiding = true;
+    checkLeftAndRight();  // 🔁 Check sides instead of just reversing
 } else {
-    appendToLog("✅ Path clear — moving forward");
-    sendCommand('f');
+    if (!obstacleAvoiding) {
+        appendToLog("✅ Path clear — moving forward");
+        sendCommand('f');
+    }
 }
 
     }
@@ -234,6 +284,43 @@ if (centerDepth < 0.3f) {
             appendToLog("Serial port not available");
         }
     }
+private void checkLeftAndRight() {
+    appendToLog("🔍 Checking left side...");
+
+    sendCommand('l');  // Turn 90° left
+    scanHandler.postDelayed(() -> {
+        float leftDepth = currentSmoothedDepth;
+        appendToLog("📷 Left depth: " + leftDepth);
+
+        appendToLog("🔄 Turning right (180°) to check right side...");
+        sendCommand('r');  // 90° back to center
+        scanHandler.postDelayed(() -> {
+            sendCommand('r');  // another 90° to right
+            scanHandler.postDelayed(() -> {
+                float rightDepth = currentSmoothedDepth;
+                appendToLog("📷 Right depth: " + rightDepth);
+
+                if (leftDepth > rightDepth + 0.05f) {
+    appendToLog("↩ Turning left (left clearer: " + leftDepth + " > " + rightDepth + ")");
+    sendCommand('l');
+} else if (rightDepth > leftDepth + 0.05f) {
+    appendToLog("↪ Turning right (right clearer: " + rightDepth + " > " + leftDepth + ")");
+    sendCommand('r');
+} else {
+    appendToLog("🛑 No clear direction, stopping. Left: " + leftDepth + ", Right: " + rightDepth);
+    sendCommand('s');
+}
+                scanHandler.postDelayed(() -> {
+                    appendToLog("🚀 Resuming forward motion.");
+                    sendCommand('f');
+                    obstacleAvoiding = false;  // Unlock movement
+                }, 1000);
+
+            }, 1000);
+        }, 1000);
+
+    }, 1000);
+}
 
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
