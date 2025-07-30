@@ -255,6 +255,45 @@ for (int dy = -2; dy <= 2; dy++) {
 
 float normalizedCenterDepth = (count > 0) ? (sum / count) : 0f;
 currentSmoothedDepth = normalizedCenterDepth;
+// 🔄 Check if we are scanning left or right
+if (scanState == ScanState.SCANNING_LEFT) {
+    leftScanDepth = currentSmoothedDepth;
+    appendToLog("📷 Captured LEFT depth: " + leftScanDepth);
+    scanState = ScanState.SCANNING_RIGHT;
+
+    appendToLog("🔁 Turning right to scan RIGHT...");
+    sendCommand('r');
+
+    scanHandler.postDelayed(() -> {
+        sendCommand('r');
+        scanHandler.postDelayed(() -> {
+            appendToLog("📷 Ready to scan RIGHT frame...");
+            // Wait for next detectObstacles() call to get right depth
+        }, 1000);
+    }, 1000);
+
+    return;
+}
+
+if (scanState == ScanState.SCANNING_RIGHT) {
+    rightScanDepth = currentSmoothedDepth;
+    appendToLog("📷 Captured RIGHT depth: " + rightScanDepth);
+
+    if (rightScanDepth > leftScanDepth + 0.05f) {
+        appendToLog("➡ Right is clearer. Moving forward.");
+        sendCommand('f');
+    } else {
+        appendToLog("⬅ Left is better or equal. Turning back left.");
+        sendCommand('l');
+        scanHandler.postDelayed(() -> {
+            sendCommand('f');
+        }, 1000);
+    }
+
+    scanState = ScanState.IDLE;
+    obstacleAvoiding = false;
+    return;
+}
 
 // Log the result
 appendToLog("📏 Normalized center depth: " + normalizedCenterDepth);
@@ -286,43 +325,21 @@ if (normalizedCenterDepth < 0.3f) {
             appendToLog("Serial port not available");
         }
     }
+
 private void checkLeftAndRight() {
-    appendToLog("🔍 Checking left side...");
-
-    sendCommand('l');  // Turn 90° left
-    scanHandler.postDelayed(() -> {
-        float leftDepth = currentSmoothedDepth;
-        appendToLog("📷 Left depth: " + leftDepth);
-
-        appendToLog("🔄 Turning right (180°) to check right side...");
-        sendCommand('r');  // 90° back to center
-        scanHandler.postDelayed(() -> {
-            sendCommand('r');  // another 90° to right
-            scanHandler.postDelayed(() -> {
-                float rightDepth = currentSmoothedDepth;
-                appendToLog("📷 Right depth: " + rightDepth);
-
-                if (leftDepth > rightDepth + 0.05f) {
-    appendToLog("↩ Turning left (left clearer: " + leftDepth + " > " + rightDepth + ")");
+    appendToLog("🔍 Starting scan: Turning left...");
+    scanState = ScanState.SCANNING_LEFT;
     sendCommand('l');
-} else if (rightDepth > leftDepth + 0.05f) {
-    appendToLog("↪ Turning right (right clearer: " + rightDepth + " > " + leftDepth + ")");
-    sendCommand('r');
-} else {
-    appendToLog("🛑 No clear direction, stopping. Left: " + leftDepth + ", Right: " + rightDepth);
-    sendCommand('s');
-}
-                scanHandler.postDelayed(() -> {
-                    appendToLog("🚀 Resuming forward motion.");
-                    sendCommand('f');
-                    obstacleAvoiding = false;  // Unlock movement
-                }, 1000);
 
-            }, 1000);
-        }, 1000);
-
+    scanHandler.postDelayed(() -> {
+        appendToLog("📷 Ready to scan LEFT frame...");
+        // DetectObstacles() will now handle the depth capture for this angle
     }, 1000);
 }
+
+
+
+
 
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
