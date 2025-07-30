@@ -46,6 +46,7 @@ import java.io.FileInputStream;
 import java.nio.channels.FileChannel;
 import java.nio.MappedByteBuffer;
 
+@androidx.camera.core.ExperimentalGetImage
 public class MainActivity extends AppCompatActivity implements FragmentManager.OnBackStackChangedListener {
 
 private static final int REQUEST_CAMERA_PERMISSION = 10;  
@@ -268,4 +269,4 @@ protected void onNewIntent(Intent intent) {
     }  
     super.onNewIntent(intent);  
 }  
-            }
+    }
