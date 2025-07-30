@@ -1,9 +1,8 @@
+package de.kai_morich.simple_usb_terminal;
 import android.content.pm.PackageManager;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
 import android.os.Bundle;
-import android.content.Intent;
-import android.Manifest;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -113,7 +112,8 @@ protected void onCreate(Bundle savedInstanceState) {
     setSupportActionBar(toolbar);  
     getSupportFragmentManager().addOnBackStackChangedListener(this);  
     if (savedInstanceState == null)  
-          
+        getSupportFragmentManager().beginTransaction().add(R.id.fragment, new DevicesFragment(), "devices").commit();  
+    else  
         onBackStackChanged();  
 
     previewView = findViewById(R.id.previewView);  
@@ -210,15 +210,9 @@ private void startCamera() {
 
 private void detectObstacles(ImageProxy image) {  
     // ✅ Step 4: Convert to Bitmap and prepare for MiDaS  
-    converter.yuvToRgb(image, bitmapBuffer);
+    converter.yuvToRgb(image, bitmapBuffer);  
 
-if (bitmapBuffer == null) {
-appendToLog("⚠️ Bitmap conversion failed (null)");
-} else {
-appendToLog("✅ Bitmap conversion success");
-}
-
-Bitmap resized = Bitmap.createScaledBitmap(bitmapBuffer, INPUT_WIDTH, INPUT_HEIGHT, true);  
+    Bitmap resized = Bitmap.createScaledBitmap(bitmapBuffer, INPUT_WIDTH, INPUT_HEIGHT, true);  
     TensorImage inputImage = TensorImage.fromBitmap(resized);  
 
     // ✅ Step 5: Run the model on inputImage  
@@ -226,9 +220,6 @@ Bitmap resized = Bitmap.createScaledBitmap(bitmapBuffer, INPUT_WIDTH, INPUT_HEIG
     tflite.run(inputImage.getBuffer(), outputBuffer.getBuffer());
 
 float[] depthArray = outputBuffer.getFloatArray();
-appendToLog("📏 Depth output sample: " + depthArray[0] + ", " +
-depthArray[depthArray.length / 2] + ", " +
-depthArray[depthArray.length - 1]);
 
 // Normalize depth values to range [0, 1]
 float min = Float.MAX_VALUE;
@@ -259,24 +250,24 @@ count++;
 }
 }
 
-appendToLog("📐 Analyzing center window around (" + centerX + ", " + centerY + ") — Pixels: " + count);
 float normalizedCenterDepth = (count > 0) ? (sum / count) : 0f;
-appendToLog("📊 Calculated avg depth for " + scanState.name() + ": " + normalizedCenterDepth);
 currentSmoothedDepth = normalizedCenterDepth;
 // 🔄 Check if we are scanning left or right
 if (scanState == ScanState.SCANNING_LEFT) {
-appendToLog("📸 Capturing scan frame (" + scanState.name() + ")...");
-appendToLog("🖼️ Bitmap size: " + bitmapBuffer.getWidth() + "x" + bitmapBuffer.getHeight());
 leftScanDepth = currentSmoothedDepth;
 appendToLog("📷 Captured LEFT depth: " + leftScanDepth);
 scanState = ScanState.SCANNING_RIGHT;
 
-appendToLog("🔁 Turning right to scan RIGHT...");
+appendToLog("🔁 Turning right to scan RIGHT...");  
+sendCommand('r');  
 
-sendCommand('r');
-scanHandler.postDelayed(() -> {
-appendToLog("📷 Ready to scan RIGHT frame...");
-}, 2000);
+scanHandler.postDelayed(() -> {  
+    sendCommand('r');  
+    scanHandler.postDelayed(() -> {  
+        appendToLog("📷 Ready to scan RIGHT frame...");  
+        // Wait for next detectObstacles() call to get right depth  
+    }, 1000);  
+}, 1000);  
 
 return;
 
@@ -373,10 +364,12 @@ public boolean onSupportNavigateUp() {
 @Override  
 protected void onNewIntent(Intent intent) {  
     if ("android.hardware.usb.action.USB_DEVICE_ATTACHED".equals(intent.getAction())) {  
-          
+        TerminalFragment terminal = (TerminalFragment) getSupportFragmentManager().findFragmentByTag("terminal");  
+        if (terminal != null) terminal.status("USB device detected");  
         appendToLog("USB device attached");  
     }  
     super.onNewIntent(intent);  
 }  
 }
 
+    
