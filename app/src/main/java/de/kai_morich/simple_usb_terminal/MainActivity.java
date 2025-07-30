@@ -3,6 +3,7 @@ import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
 import android.os.Bundle;
 import android.content.Intent;
+import de.kai_morich.simple_usb_terminal.YuvToRgbConverter;
 import android.Manifest;
 import android.os.Handler;
 import android.os.Looper;
