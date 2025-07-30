@@ -1,8 +1,3 @@
-// [UNCHANGED IMPORTS]
-package de.kai_morich.simple_usb_terminal;
-
-import android.Manifest;
-import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
@@ -214,6 +209,11 @@ private float currentSmoothedDepth = 0f;
     private void detectObstacles(ImageProxy image) {
         // ✅ Step 4: Convert to Bitmap and prepare for MiDaS
         converter.yuvToRgb(image, bitmapBuffer);
+if (bitmapBuffer == null) {
+    appendToLog("⚠️ Bitmap conversion failed (null)");
+} else {
+    appendToLog("✅ Bitmap conversion success");
+}
 
         Bitmap resized = Bitmap.createScaledBitmap(bitmapBuffer, INPUT_WIDTH, INPUT_HEIGHT, true);
         TensorImage inputImage = TensorImage.fromBitmap(resized);
@@ -223,6 +223,9 @@ private float currentSmoothedDepth = 0f;
         tflite.run(inputImage.getBuffer(), outputBuffer.getBuffer());
 
 float[] depthArray = outputBuffer.getFloatArray();
+appendToLog("📏 Depth output sample: " + depthArray[0] + ", " + 
+            depthArray[depthArray.length / 2] + ", " + 
+            depthArray[depthArray.length - 1]);
 
 // Normalize depth values to range [0, 1]
 float min = Float.MAX_VALUE;
@@ -253,24 +256,25 @@ for (int dy = -2; dy <= 2; dy++) {
     }
 }
 
+appendToLog("📐 Analyzing center window around (" + centerX + ", " + centerY + ") — Pixels: " + count);
 float normalizedCenterDepth = (count > 0) ? (sum / count) : 0f;
+appendToLog("📊 Calculated avg depth for " + scanState.name() + ": " + normalizedCenterDepth);
 currentSmoothedDepth = normalizedCenterDepth;
 // 🔄 Check if we are scanning left or right
 if (scanState == ScanState.SCANNING_LEFT) {
+appendToLog("📸 Capturing scan frame (" + scanState.name() + ")...");
+appendToLog("🖼️ Bitmap size: " + bitmapBuffer.getWidth() + "x" + bitmapBuffer.getHeight());
     leftScanDepth = currentSmoothedDepth;
     appendToLog("📷 Captured LEFT depth: " + leftScanDepth);
     scanState = ScanState.SCANNING_RIGHT;
 
     appendToLog("🔁 Turning right to scan RIGHT...");
-    sendCommand('r');
-
-    scanHandler.postDelayed(() -> {
-        sendCommand('r');
-        scanHandler.postDelayed(() -> {
-            appendToLog("📷 Ready to scan RIGHT frame...");
-            // Wait for next detectObstacles() call to get right depth
-        }, 1000);
-    }, 1000);
+    
+sendCommand('r');
+scanHandler.postDelayed(() -> {
+    appendToLog("📷 Ready to scan RIGHT frame...");
+}, 2000);
+      
 
     return;
 }
