@@ -207,16 +207,39 @@ private void detectObstacles(ImageProxy image) {
     appendToLog("🕳 Depth prediction complete. Values: [" + depthArray[0] + ", ...]");
 
 // ✅ Step 6: Extract center depth
-int centerIndex = (INPUT_HEIGHT / 2) * INPUT_WIDTH + (INPUT_WIDTH / 2);
-float centerDepth = depthArray[centerIndex];
-appendToLog("📏 Estimated center depth: " + centerDepth);
-if (centerDepth < 0.3f) {
-appendToLog("🛑 Obstacle too close — going backward");
-sendCommand('b');
-} else {
-appendToLog("✅ Path clear — moving forward");
-sendCommand('f');
+// ✅ Step 6: Normalize the depth map
+float min = Float.MAX_VALUE;
+float max = Float.MIN_VALUE;
+for (float val : depthArray) {
+    if (val < min) min = val;
+    if (val > max) max = val;
 }
+
+// Prevent divide-by-zero
+float range = max - min;
+if (range == 0) range = 1;
+
+// ✅ Get center depth and normalize
+int centerIndex = (INPUT_HEIGHT / 2) * INPUT_WIDTH + (INPUT_WIDTH / 2);
+float rawCenter = depthArray[centerIndex];
+float normalizedCenter = (rawCenter - min) / range;
+
+appendToLog("📏 Raw center depth: " + rawCenter);
+appendToLog("📏 Normalized center depth: " + normalizedCenter);
+
+// ✅ Use normalized value for decisions
+if (normalizedCenter > 0.6f) {
+    appendToLog("🛑 Obstacle close — going backward");
+    sendCommand('b');
+} else {
+    appendToLog("✅ Path clear — moving forward");
+    sendCommand('f');
+}
+
+
+
+
+
 
 }  
 
