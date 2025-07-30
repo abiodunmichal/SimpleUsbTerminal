@@ -1,211 +1,271 @@
+// [UNCHANGED IMPORTS]
 package de.kai_morich.simple_usb_terminal;
 
 import android.Manifest;
-import android.app.Activity;
-import android.app.DownloadManager;
+import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.graphics.Bitmap;
-import android.graphics.Rect;
-import android.graphics.RectF;
-import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
 import android.os.Bundle;
-import android.os.Environment;
-import android.os.Handler;
 import android.util.Log;
-import android.util.TypedValue;
-import android.view.TextureView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.Toolbar;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageProxy;
 import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
+import androidx.camera.view.PreviewView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import androidx.fragment.app.FragmentManager;
 
 import com.google.common.util.concurrent.ListenableFuture;
+import com.hoho.android.usbserial.driver.UsbSerialDriver;
+import com.hoho.android.usbserial.driver.UsbSerialPort;
+import com.hoho.android.usbserial.driver.UsbSerialProber;
 
-import org.tensorflow.lite.Interpreter;
-import org.tensorflow.lite.support.common.FileUtil;
-
-import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.MappedByteBuffer;
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.Locale;
-import java.util.concurrent.ExecutorService;
+import java.util.List;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 
-public class MainActivity extends AppCompatActivity {
-    private final int REQUEST_CAMERA_PERMISSION = 200;
-    private ExecutorService cameraExecutor;
-    private YuvToRgbConverter yuvToRgbConverter;
-    private Interpreter tfLiteInterpreter;
+// ✅ Step 1: TensorFlow Lite and model-loading imports
+import org.tensorflow.lite.Interpreter;
+import org.tensorflow.lite.support.image.TensorImage;
+import org.tensorflow.lite.support.tensorbuffer.TensorBuffer;
+import org.tensorflow.lite.DataType;
 
+import android.graphics.Bitmap;
+import android.content.res.AssetFileDescriptor;
+import java.io.FileInputStream;
+import java.nio.channels.FileChannel;
+import java.nio.MappedByteBuffer;
+
+public class MainActivity extends AppCompatActivity implements FragmentManager.OnBackStackChangedListener {
+
+    private static final int REQUEST_CAMERA_PERMISSION = 10;
+    private PreviewView previewView;
     private TextView debugText;
-    private Handler handler = new Handler();
-    private boolean isProcessing = false;
-    private UsbSerialPort usbSerialPort;
 
-    private File logFile;
+    private UsbSerialPort serialPort;
+    private UsbManager usbManager;
+    private char lastCommand = '-';
+    private boolean obstacleDetected = false;
+    private boolean scanning = false;
+    private int leftScan = 0;
+    private int rightScan = 0;
+
+    // ✅ Step 2: MiDaS model interpreter and input size
+    private Interpreter tflite;
+    private final int INPUT_WIDTH = 256;
+    private final int INPUT_HEIGHT = 256;
+
+    private final StringBuilder fullLog = new StringBuilder();
+
+    private void appendToLog(String msg) {
+        Log.d("AppLog", msg);
+        runOnUiThread(() -> {
+            fullLog.append(msg).append("\n");
+            String[] lines = fullLog.toString().split("\n");
+            if (lines.length > 20) {
+                StringBuilder trimmed = new StringBuilder();
+                for (int i = lines.length - 20; i < lines.length; i++) {
+                    trimmed.append(lines[i]).append("\n");
+                }
+                fullLog.setLength(0);
+                fullLog.append(trimmed);
+            }
+            debugText.setText(fullLog.toString());
+        });
+    }
+
+    private YuvToRgbConverter converter;
+    private Bitmap bitmapBuffer;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        Toolbar toolbar = findViewById(R.id.toolbar);
+        setSupportActionBar(toolbar);
+        getSupportFragmentManager().addOnBackStackChangedListener(this);
+        if (savedInstanceState == null)
+            getSupportFragmentManager().beginTransaction().add(R.id.fragment, new DevicesFragment(), "devices").commit();
+        else
+            onBackStackChanged();
+
+        previewView = findViewById(R.id.previewView);
         debugText = findViewById(R.id.debugText);
-        appendToLog("Initializing...");
+
+        appendToLog("App started");
+
+        // ✅ Init converter and allocate bitmap buffer
+        converter = new YuvToRgbConverter(this);
+
+        // ✅ Step 3: Load the MiDaS model
+        try {
+            AssetFileDescriptor fileDescriptor = getAssets().openFd("midas_small.tflite");
+            FileInputStream inputStream = new FileInputStream(fileDescriptor.getFileDescriptor());
+            FileChannel fileChannel = inputStream.getChannel();
+            long startOffset = fileDescriptor.getStartOffset();
+            long declaredLength = fileDescriptor.getDeclaredLength();
+            MappedByteBuffer modelBuffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength);
+            tflite = new Interpreter(modelBuffer);
+            appendToLog("✅ MiDaS model loaded from assets.");
+        } catch (Exception e) {
+            appendToLog("❌ Failed to load model: " + e.getMessage());
+        }
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
                 != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this,
-                    new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION);
+                    new String[]{Manifest.permission.CAMERA},
+                    REQUEST_CAMERA_PERMISSION);
         } else {
             startCamera();
         }
 
-        try {
-            MappedByteBuffer tfliteModel = FileUtil.loadMappedFile(this, "midas_small.tflite");
-            tfLiteInterpreter = new Interpreter(tfliteModel);
-            appendToLog("Model loaded successfully.");
-        } catch (IOException e) {
-            appendToLog("Failed to load model: " + e.getMessage());
+        usbManager = (UsbManager) getSystemService(USB_SERVICE);
+        List<UsbSerialDriver> drivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager);
+        if (!drivers.isEmpty()) {
+            UsbSerialDriver driver = drivers.get(0);
+            UsbDeviceConnection connection = usbManager.openDevice(driver.getDevice());
+            if (connection != null) {
+                serialPort = driver.getPorts().get(0);
+                try {
+                    serialPort.open(connection);
+                    serialPort.setParameters(9600, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE);
+                    Toast.makeText(this, "Serial connected", Toast.LENGTH_SHORT).show();
+                    appendToLog("Serial connected at 9600 baud");
+                } catch (Exception e) {
+                    Log.e("Serial", "Error opening serial port", e);
+                    appendToLog("Error opening serial port: " + e.getMessage());
+                }
+            } else {
+                Toast.makeText(this, "USB permission denied", Toast.LENGTH_SHORT).show();
+                appendToLog("USB permission denied or device not found");
+            }
         }
-
-        yuvToRgbConverter = new YuvToRgbConverter(this);
-        cameraExecutor = Executors.newSingleThreadExecutor();
-
-        File downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-        logFile = new File(downloadsDir, "robot_log.txt");
     }
 
     private void startCamera() {
-        ListenableFuture<ProcessCameraProvider> cameraProviderFuture =
-                ProcessCameraProvider.getInstance(this);
+        ListenableFuture cameraProviderFuture = ProcessCameraProvider.getInstance(this);
         cameraProviderFuture.addListener(() -> {
             try {
-                ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
-
+                ProcessCameraProvider cameraProvider = (ProcessCameraProvider) cameraProviderFuture.get();
                 Preview preview = new Preview.Builder().build();
-                CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
+                preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
-                ImageAnalysis imageAnalysis =
-                        new ImageAnalysis.Builder()
-                                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                                .build();
+                CameraSelector cameraSelector = new CameraSelector.Builder()
+                        .requireLensFacing(CameraSelector.LENS_FACING_BACK)
+                        .build();
 
-                imageAnalysis.setAnalyzer(cameraExecutor, image -> {
-                    if (!isProcessing) {
-                        isProcessing = true;
-                        processImage(image);
-                    } else {
-                        image.close();
-                    }
-                });
+                ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .build();
+
+                imageAnalysis.setAnalyzer(
+                        Executors.newSingleThreadExecutor(),
+                        image -> {
+                            if (bitmapBuffer == null) {
+                                bitmapBuffer = Bitmap.createBitmap(
+                                        image.getWidth(), image.getHeight(), Bitmap.Config.ARGB_8888);
+                            }
+                            detectObstacles(image);
+                            image.close();
+                        });
 
                 cameraProvider.unbindAll();
-                cameraProvider.bindToLifecycle(
-                        this, cameraSelector, preview, imageAnalysis);
-            } catch (Exception e) {
-                appendToLog("Camera initialization failed: " + e.getMessage());
+                cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis);
+                appendToLog("Camera active");
+
+            } catch (ExecutionException | InterruptedException e) {
+                Log.e("CameraX", "Camera start failed", e);
+                appendToLog("Camera start failed: " + e.getMessage());
             }
         }, ContextCompat.getMainExecutor(this));
     }
 
-    private void processImage(ImageProxy image) {
-        Bitmap bitmap = Bitmap.createBitmap(image.getWidth(), image.getHeight(), Bitmap.Config.ARGB_8888);
-        yuvToRgbConverter.yuvToRgb(image, bitmap);
-        Bitmap scaled = Bitmap.createScaledBitmap(bitmap, 256, 256, true);
+    private void detectObstacles(ImageProxy image) {
+        // ✅ Step 4: Convert to Bitmap and prepare for MiDaS
+        converter.yuvToRgb(image, bitmapBuffer);
 
-        ByteBuffer input = ByteBuffer.allocateDirect(256 * 256 * 3 * 4);
-        input.rewind();
-        for (int y = 0; y < 256; y++) {
-            for (int x = 0; x < 256; x++) {
-                int px = scaled.getPixel(x, y);
-                input.putFloat(((px >> 16) & 0xFF) / 255.f);  // R
-                input.putFloat(((px >> 8) & 0xFF) / 255.f);   // G
-                input.putFloat((px & 0xFF) / 255.f);          // B
+        Bitmap resized = Bitmap.createScaledBitmap(bitmapBuffer, INPUT_WIDTH, INPUT_HEIGHT, true);
+        TensorImage inputImage = TensorImage.fromBitmap(resized);
+
+        // ✅ Step 5: Run the model on inputImage
+        TensorBuffer outputBuffer = TensorBuffer.createFixedSize(new int[]{1, INPUT_HEIGHT, INPUT_WIDTH, 1}, DataType.FLOAT32);
+        tflite.run(inputImage.getBuffer(), outputBuffer.getBuffer());
+
+        float[] depthArray = outputBuffer.getFloatArray();
+        appendToLog("🕳 Depth prediction complete. Values: [" + depthArray[0] + ", ...]");
+// ✅ Step 6: Extract center depth
+    int centerIndex = (INPUT_HEIGHT / 2) * INPUT_WIDTH + (INPUT_WIDTH / 2);
+    float centerDepth = depthArray[centerIndex];
+    appendToLog("📏 Estimated center depth: " + centerDepth);
+if (centerDepth < 0.3f) {
+    appendToLog("🛑 Obstacle too close — going backward");
+    sendCommand('b');
+} else {
+    appendToLog("✅ Path clear — moving forward");
+    sendCommand('f');
+}
+
+    }
+
+    private void sendCommand(char command) {
+        if (serialPort != null) {
+            try {
+                serialPort.write(new byte[]{(byte) command}, 100);
+                lastCommand = command;
+                appendToLog("Sent command: " + command);
+            } catch (Exception e) {
+                Log.e("SerialCommand", "Failed to send command", e);
+                appendToLog("Error sending command: " + e.getMessage());
             }
-        }
-
-        float[][][] output = new float[1][256][256];
-        tfLiteInterpreter.run(input, output);
-
-        float centerDepth = output[0][128][128];
-        int estimatedCM = (int) (1.0f / (centerDepth + 1e-6f) * 100); // Just an estimate
-
-        appendToLog("Depth estimate: " + estimatedCM + " cm");
-
-        if (estimatedCM < 20) {
-            sendCommand("s"); // Stop
-            appendToLog("Obstacle detected (<20cm), stopping");
-            handler.postDelayed(() -> {
-                sendCommand("b"); // Back
-                appendToLog("Backing up");
-                handler.postDelayed(() -> {
-                    sendCommand("r"); // Turn right
-                    appendToLog("Turning right");
-                    handler.postDelayed(() -> {
-                        sendCommand("f"); // Resume forward
-                        appendToLog("Moving forward");
-                        isProcessing = false;
-                    }, 1000);
-                }, 1000);
-            }, 1000);
         } else {
-            sendCommand("f");
-            appendToLog("Path clear, moving forward");
-            handler.postDelayed(() -> isProcessing = false, 500);
-        }
-
-        image.close();
-    }
-
-    private void sendCommand(String cmd) {
-        if (usbSerialPort != null) {
-            usbSerialPort.write(cmd.getBytes());
-        }
-    }
-
-    private void appendToLog(String message) {
-        String timeStamp = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
-        String fullMsg = timeStamp + " - " + message;
-        runOnUiThread(() -> debugText.append(fullMsg + "\n"));
-
-        try (FileWriter writer = new FileWriter(logFile, true)) {
-            writer.append(fullMsg).append("\n");
-        } catch (IOException e) {
-            Log.e("Logger", "Failed to write log: " + e.getMessage());
+            Log.e("SerialCommand", "Serial port not available");
+            appendToLog("Serial port not available");
         }
     }
 
     @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        if (cameraExecutor != null) {
-            cameraExecutor.shutdown();
-        }
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode,
-                                           @NonNull String[] permissions,
-                                           @NonNull int[] grantResults) {
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQUEST_CAMERA_PERMISSION) {
-            if (grantResults.length > 0 &&
-                    grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 startCamera();
             } else {
-                Toast.makeText(this, "Camera permission is required", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "Camera permission denied", Toast.LENGTH_SHORT).show();
+                appendToLog("Camera permission denied");
             }
         }
+    }
+
+    @Override
+    public void onBackStackChanged() {
+        getSupportActionBar().setDisplayHomeAsUpEnabled(getSupportFragmentManager().getBackStackEntryCount() > 0);
+    }
+
+    @Override
+    public boolean onSupportNavigateUp() {
+        onBackPressed();
+        return true;
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        if ("android.hardware.usb.action.USB_DEVICE_ATTACHED".equals(intent.getAction())) {
+            TerminalFragment terminal = (TerminalFragment) getSupportFragmentManager().findFragmentByTag("terminal");
+            if (terminal != null) terminal.status("USB device detected");
+            appendToLog("USB device attached");
+        }
+        super.onNewIntent(intent);
     }
     }
