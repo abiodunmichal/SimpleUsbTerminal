@@ -16,7 +16,14 @@
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
             android:background="?attr/colorPrimary" />
-
+<Button
+    android:id="@+id/button_file_picker"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:text="Send File to Arduino"
+    android:layout_alignParentBottom="true"
+    android:layout_centerHorizontal="true"
+    android:layout_marginBottom="16dp"/>
     </com.google.android.material.appbar.AppBarLayout>
 
     <RelativeLayout
@@ -26,3 +33,4 @@
         app:layout_behavior="@string/appbar_scrolling_view_behavior"/>
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>
+
