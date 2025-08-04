@@ -340,7 +340,7 @@ public class TerminalFragment extends Fragment implements ServiceConnection, Ser
         usbSerialPort = null;
     }
 
-    private void send(String str) {
+    public void send(String str) {
         if(connected != Connected.True) {
             Toast.makeText(getActivity(), "not connected", Toast.LENGTH_SHORT).show();
             return;
@@ -673,3 +673,4 @@ public class TerminalFragment extends Fragment implements ServiceConnection, Ser
     }
 
 }
+
