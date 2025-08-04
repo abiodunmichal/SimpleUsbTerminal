@@ -74,7 +74,7 @@ public class MainActivity extends AppCompatActivity implements FragmentManager.O
             String line;
             while ((line = reader.readLine()) != null) {
                 if (terminal != null) {
-                    terminal.write(line + "\n");  // Send each line over serial
+                   terminal.send(line + "\n");  // Send each line over serial
                 }
             }
             reader.close();
@@ -106,3 +106,4 @@ public class MainActivity extends AppCompatActivity implements FragmentManager.O
         super.onNewIntent(intent);
     }
             }
+
