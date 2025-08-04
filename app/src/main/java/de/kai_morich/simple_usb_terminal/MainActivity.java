@@ -35,7 +35,7 @@ public class MainActivity extends AppCompatActivity implements FragmentManager.O
             onBackStackChanged();
 
         // Button to trigger file picker
-        Button pickFileBtn = findViewById(R.id.button_pick_file);
+         Button pickFileBtn = findViewById(R.id.button_file_picker);
         if (pickFileBtn != null) {
             pickFileBtn.setOnClickListener(v -> openFilePicker());
         }
@@ -106,4 +106,5 @@ public class MainActivity extends AppCompatActivity implements FragmentManager.O
         super.onNewIntent(intent);
     }
             }
+
 
